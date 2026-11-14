@@ -1,0 +1,43 @@
+{
+  "name": "dsh-patchkeeper",
+  "version": "0.2.0",
+  "description": "本地补丁管家：给 DSH 插件的本地魔改一个家——影子副本热挂载，原版永远干净，官方升级后自动重打。Local patch keeper for DeepSeek Harness plugins: shadow-copy hot mount, pristine originals, auto re-apply after upgrades.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alequet/dsh-patchkeeper.git"
+  },
+  "homepage": "https://github.com/alequet/dsh-patchkeeper#readme",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "patch",
+    "patch-manager"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  }
+}

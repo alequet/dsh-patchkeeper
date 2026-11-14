@@ -1,0 +1,6 @@
+# dsh-patchkeeper bundle patch: 插入补丁管家插件本体。
+# name 必须是实际包名（cordis 按 name import 包）。
+# 本插件必须排在 bundles 首位：apply 要抢在其他插件代码被 import 之前跑。
+- insert:
+    - id: patchkeeper
+      name: dsh-patchkeeper
