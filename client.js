@@ -248,6 +248,7 @@ window.__ModuleLoader__.load({
             ? h('div', { key: 'f', style: { fontSize: 11, opacity: 0.6, marginTop: 2, wordBreak: 'break-all' } }, p.files.join('、'))
             : null,
           diag ? h('div', { key: 'diag', style: { fontSize: 12, color: '#dc3c3c', marginTop: 4, lineHeight: 1.6 } }, diag) : null,
+          p.risk ? h('div', { key: 'risk', style: { fontSize: 12, color: '#d29922', marginTop: 4, lineHeight: 1.6 } }, `⚠ 禁用风险：${p.risk}`) : null,
           op
             ? h('div', { key: 'op', style: { fontSize: 12, fontWeight: 600, marginTop: 4, color: op.ok ? '#2ea043' : '#dc3c3c' } }, op.text)
             : null,
@@ -339,7 +340,10 @@ window.__ModuleLoader__.load({
                 p,
                 busy,
                 op: ops[p.name],
-                onToggle: (pp) => act(pp.enabled ? 'disable' : 'enable', pp),
+                onToggle: (pp) => {
+                  if (pp.enabled && pp.risk && !window.confirm(`禁用风险：${pp.risk}\n\n确认禁用？`)) return
+                  act(pp.enabled ? 'disable' : 'enable', pp)
+                },
                 onSaveNote: (pp, note) => act('note', pp, { note }),
               }),
             ))

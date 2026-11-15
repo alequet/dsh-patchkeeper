@@ -621,6 +621,7 @@ switch (command) {
           version: p.version,
           enabled: cfg[p.name]?.enabled !== false,
           note: cfg[p.name]?.note || '',
+          risk: cfg[p.name]?.risk || '',
           files: patchFileList(p),
           installedVersion: probe.installedVersion,
           status: probe.status,
@@ -651,6 +652,23 @@ switch (command) {
     cfg[target] = { ...(cfg[target] || {}), enabled: command === 'enable' }
     writeConfig(cfg)
     out = collectStatus({ dryRun: false, force: flags.force, only: target })
+    break
+  }
+  case 'risk': {
+    const rest = []
+    for (let i = args.indexOf('risk') + 1; i < args.length; i++) {
+      if (args[i] === '--pkg') { i++; continue }
+      if (!args[i].startsWith('-')) rest.push(args[i])
+    }
+    const riskText = rest.join(' ')
+    if (!flags.only) {
+      console.error('用法: risk --pkg <包名> [风险说明]（省略说明=清除）')
+      process.exit(1)
+    }
+    const cfg = readConfig()
+    cfg[flags.only] = { ...(cfg[flags.only] || {}), risk: riskText }
+    writeConfig(cfg)
+    out = { command: 'risk', name: flags.only, risk: riskText }
     break
   }
   case 'note': {
