@@ -47,7 +47,10 @@ const SHADOWS = path.join(DATA_DIR, 'shadows')
 const shadowDir = (slug) => path.join(SHADOWS, slug)
 const origDir = (slug) => path.join(SHADOWS, 'orig', slug)
 
-// diff 时排除的东西：依赖目录、运行时缓存、日志、本地备份等
+// 挂载时写进副本 package.json 的生效标记（extract 前会摘掉，不污染补丁）
+const MOUNT_MARKER = '🩹 补丁生效中（patchkeeper）'
+
+// diff 时排除的东西：运行时缓存、日志、本地备份等
 const EXCLUDES = [
   'node_modules', '.git', '.svn', '.DS_Store', 'Thumbs.db',
   '*.log', 'logs', 'tmp', '.cache', 'Cache', '__pycache__',
@@ -245,6 +248,8 @@ function extractOne(name, spec, { log }) {
   result.version = version
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'patchkeeper-'))
+  let markedDesc = null // 生效标记的原文（finally 里恢复）
+  const entryPkg = path.join(dir, 'package.json') // 提升作用域：finally 要用
   try {
     const packSpec = /^https?:/.test(spec) ? spec : `${name}@${version}`
     const pack = run('npm', ['pack', packSpec, '--pack-destination', tmp, '--silent'], { cwd: tmp })
@@ -260,6 +265,15 @@ function extractOne(name, spec, { log }) {
       result.error = `tar failed: ${(untar.stderr || '').slice(0, 300)}`
       return result
     }
+    // 副本 package.json 上的生效标记不属于用户改动：临时摘掉，diff 完恢复
+    try {
+      const epkg = readJson(entryPkg)
+      if (String(epkg.description || '').includes(MOUNT_MARKER)) {
+        markedDesc = epkg.description
+        epkg.description = markedDesc.replace(MOUNT_MARKER, '').trim()
+        fs.writeFileSync(entryPkg, JSON.stringify(epkg, null, 2) + '\n')
+      }
+    } catch {}
     fs.symlinkSync(dir, path.join(tmp, 'b'))
     const exclFile = path.join(tmp, 'excludes.txt')
     fs.writeFileSync(exclFile, EXCLUDES.join('\n') + '\n')
@@ -337,6 +351,14 @@ function extractOne(name, spec, { log }) {
     result.ok = true
     return result
   } finally {
+    // 恢复生效标记（finally 兜住所有提前 return 路径）
+    if (markedDesc !== null) {
+      try {
+        const epkg = readJson(entryPkg)
+        epkg.description = markedDesc
+        fs.writeFileSync(entryPkg, JSON.stringify(epkg, null, 2) + '\n')
+      } catch {}
+    }
     fs.rmSync(tmp, { recursive: true, force: true })
   }
 }
@@ -402,6 +424,15 @@ function mount(p) {
     fs.rmSync(shadow, { recursive: true, force: true })
     return { ok: false, error: 'patch failed on shadow' }
   }
+  // 正向确认标记：挂载期间插件管理页的描述里可见「🩹 补丁生效中」；看不到 = 补丁没生效
+  try {
+    const sp = path.join(shadow, 'package.json')
+    const spkg = readJson(sp)
+    if (!String(spkg.description || '').includes(MOUNT_MARKER)) {
+      spkg.description = `${spkg.description || ''} ${MOUNT_MARKER}`.trim()
+      fs.writeFileSync(sp, JSON.stringify(spkg, null, 2) + '\n')
+    }
+  } catch {}
   // 换挂载：原版挪进 orig/，条目换成指向副本的软链
   fs.mkdirSync(path.dirname(orig), { recursive: true })
   fs.rmSync(orig, { recursive: true, force: true })

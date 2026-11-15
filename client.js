@@ -157,6 +157,74 @@ window.__ModuleLoader__.load({
       ])
     }
 
+    // 开机正向确认：绿泡泡 = N 个补丁活着；红色常驻 = 有事没挂成。
+    // 哪天开机没见到绿泡泡，就说明补丁管家出事了（包括它自己没加载以外的存活场景）。
+    function BootToast() {
+      const [info, setInfo] = React.useState(null)
+      const [gone, setGone] = React.useState(false)
+      React.useEffect(() => {
+        let live = true
+        fetchStatus().then((s) => {
+          if (!live || !s) return
+          if (s.alarm) {
+            setInfo({ level: 'alarm', text: s.alarm })
+            return
+          }
+          const results = Array.isArray(s.results) ? s.results : []
+          const mounted = results.filter((r) => r.mounted).length
+          const bad = results.filter((r) => BAD_STATUSES.includes(r.status)).length
+          if (bad) setInfo({ level: 'warn', text: `补丁管家：${bad} 个补丁未挂载，请到插件管理页处理` })
+          else if (mounted) setInfo({ level: 'ok', text: `补丁管家：${mounted} 个补丁已挂载 ✓` })
+        })
+        return () => {
+          live = false
+        }
+      }, [])
+      React.useEffect(() => {
+        if (info && info.level === 'ok') {
+          const t = setTimeout(() => setGone(true), 6000)
+          return () => clearTimeout(t)
+        }
+      }, [info])
+      if (!info || gone) return null
+      const palette = {
+        ok: { bg: 'rgba(46, 160, 67, 0.95)', fg: '#fff' },
+        warn: { bg: 'rgba(250, 173, 20, 0.95)', fg: '#3a2a00' },
+        alarm: { bg: 'rgba(220, 60, 60, 0.95)', fg: '#fff' },
+      }[info.level]
+      return h(
+        'div',
+        {
+          style: {
+            position: 'fixed',
+            top: 16,
+            right: 16,
+            zIndex: 99999,
+            padding: '10px 14px',
+            borderRadius: 10,
+            background: palette.bg,
+            color: palette.fg,
+            fontSize: 13,
+            lineHeight: 1.5,
+            maxWidth: 360,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+            display: 'flex',
+            gap: 10,
+            alignItems: 'flex-start',
+          },
+        },
+        h('span', { style: { flex: 1 } }, info.text),
+        h(
+          'button',
+          {
+            style: { background: 'none', border: 'none', color: palette.fg, cursor: 'pointer', fontSize: 14, padding: 0 },
+            onClick: () => setGone(true),
+          },
+          '×',
+        ),
+      )
+    }
+
     function apply(ctx) {
       const slots = ctx.slots ?? (typeof ctx.get === 'function' ? ctx.get('slots') : null)
       if (!slots || typeof slots.inject !== 'function') return
@@ -171,6 +239,13 @@ window.__ModuleLoader__.load({
       slots.inject('plugins.detail.section', () => {
         try {
           return slots.register({ name: 'plugins.detail.section', id: 'patchkeeper-mismatch', order: 100 }, MismatchSection)
+        } catch {
+          return () => {}
+        }
+      })
+      slots.inject('shell.overlay', () => {
+        try {
+          return slots.register({ name: 'shell.overlay', id: 'patchkeeper-boot-toast', order: 100 }, BootToast)
         } catch {
           return () => {}
         }
