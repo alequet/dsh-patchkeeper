@@ -154,6 +154,9 @@ export function apply(ctx, config = {}) {
 
   // 退出：回退干净。dispose 与 exit 双保险（revert 幂等，重复执行无副作用）
   const cleanup = () => revertPatches(logger)
-  ctx.on('dispose', cleanup)
+  ctx.on('dispose', () => {
+    cleanup()
+    process.removeListener('exit', cleanup) // HMR 自更新场景：老实例的 exit 监听不累积
+  })
   process.once('exit', cleanup)
 }

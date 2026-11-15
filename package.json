@@ -1,6 +1,6 @@
 {
   "name": "dsh-patchkeeper",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "本地补丁管家：给 DSH 插件的本地魔改一个家——影子副本热挂载，原版永远干净，官方升级后自动重打。Local patch keeper for DeepSeek Harness plugins: shadow-copy hot mount, pristine originals, auto re-apply after upgrades.",
   "license": "MIT",
   "type": "module",

@@ -40,7 +40,10 @@ function resolveProfile() {
 const PROFILE = resolveProfile()
 const NM = path.join(PROFILE, 'node_modules')
 // 影子副本必须放在 profile 的 node_modules 树内：依赖解析沿目录向上走，能摸到平铺的兄弟依赖
-const SHADOWS = path.join(NM, '.patchkeeper-shadows')
+// ≤0.2.0 曾放在 node_modules/.patchkeeper-shadows，被 pnpm reconcile 当游离目录剪掉过（实测）
+const LEGACY_SHADOWS = path.join(NM, '.patchkeeper-shadows')
+// 副本放数据目录，pnpm 管不着；副本内补 node_modules 软链指回 profile 解决依赖解析
+const SHADOWS = path.join(DATA_DIR, 'shadows')
 const shadowDir = (slug) => path.join(SHADOWS, slug)
 const origDir = (slug) => path.join(SHADOWS, 'orig', slug)
 
@@ -87,16 +90,11 @@ function writeState(patch) {
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2))
 }
 
-// 原版包的真实目录：挂载期间原版图挪在 orig/ 下，未挂载就是 node_modules 条目本身
-function realDirOf(name, slug) {
-  const orig = origDir(slug)
-  if (fs.existsSync(orig)) return orig
-  return path.join(NM, name)
-}
-
-function installedVersion(name, slug) {
+// 已装版本一律读 node_modules 条目本身：挂载时软链指向副本（版本与原版一致），
+// 未挂载时就是真实安装；orig 备份可能是过时的，不看它。
+function installedVersion(name) {
   try {
-    return readJson(path.join(realDirOf(name, slug), 'package.json')).version || null
+    return readJson(path.join(NM, name, 'package.json')).version || null
   } catch {
     return null
   }
@@ -142,6 +140,7 @@ function binFilesOf(slug) {
 // 把挂载状态恢复成原版归位、副本销毁。崩溃残留、孤儿副本都在这里清。
 function ensureCleanMount({ only } = {}) {
   const repaired = []
+  cleanLegacyMounts()
   const state = readState()
   const swaps = state.swaps || {}
   for (const [name, info] of Object.entries(swaps)) {
@@ -164,6 +163,39 @@ function ensureCleanMount({ only } = {}) {
   return repaired
 }
 
+// 旧版（≤0.2.0）挂载遗址清理：条目是指向 node_modules/.patchkeeper-shadows 的软链，
+// 原版备份在其 orig/ 下。恢复原位后整个旧目录删除。
+function cleanLegacyMounts() {
+  if (!fs.existsSync(LEGACY_SHADOWS)) return
+  for (const dirent of fs.readdirSync(LEGACY_SHADOWS, { withFileTypes: true })) {
+    if (dirent.name === 'orig') continue
+    const slug = dirent.name
+    const name = nameOf(slug)
+    const entry = path.join(NM, name)
+    try {
+      if (fs.lstatSync(entry).isSymbolicLink() && fs.realpathSync(entry) === fs.realpathSync(path.join(LEGACY_SHADOWS, slug))) {
+        fs.rmSync(entry, { force: true })
+      }
+    } catch {}
+    const legacyOrig = path.join(LEGACY_SHADOWS, 'orig', slug)
+    if (fs.existsSync(legacyOrig) && !fs.existsSync(entry) && profileLists(name)) {
+      fs.mkdirSync(path.dirname(entry), { recursive: true })
+      fs.renameSync(legacyOrig, entry)
+    }
+  }
+  fs.rmSync(LEGACY_SHADOWS, { recursive: true, force: true })
+}
+
+// 插件是否仍在 profile 依赖清单里（不在 = 用户已卸载，原版备份不能复活它）
+function profileLists(name) {
+  try {
+    const pkg = readJson(path.join(PROFILE, 'package.json'))
+    return Object.hasOwn(pkg.dependencies ?? {}, name)
+  } catch {
+    return true // 读不到清单时保守处理：恢复原版
+  }
+}
+
 // 摘一个挂载：删我们的软链 → 原版归位 → 销毁副本。返回是否有实际清理动作。
 // 竞态防护：若条目已被外部（升级器）换成新安装，原版备份已过时——丢弃备份，保留新装。
 function dismount(p) {
@@ -173,10 +205,11 @@ function dismount(p) {
   const hadWork = isMounted(p.name, p.slug) || fs.existsSync(orig) || fs.existsSync(shadow)
   if (isMounted(p.name, p.slug)) fs.rmSync(entry, { force: true })
   if (fs.existsSync(orig)) {
-    if (!fs.existsSync(entry)) {
+    if (!fs.existsSync(entry) && profileLists(p.name)) {
       fs.mkdirSync(path.dirname(entry), { recursive: true })
       fs.renameSync(orig, entry) // 同分区 rename，原子
     } else {
+      // 条目已被在线更新替换成新版，或插件已被卸载：备份已过时，丢弃不复活
       fs.rmSync(orig, { recursive: true, force: true })
     }
   }
@@ -208,7 +241,7 @@ function extractOne(name, spec, { log }) {
     result.error = 'local-package-skipped'
     return result
   }
-  const version = installedVersion(name, slug)
+  const version = installedVersion(name)
   result.version = version
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'patchkeeper-'))
@@ -362,6 +395,9 @@ function mount(p) {
     fs.rmSync(shadow, { recursive: true, force: true })
     return { ok: false, error: `copy failed: ${(cp.stderr || '').slice(0, 200)}` }
   }
+  // 副本在 profile 树外：补 node_modules 软链指回 profile，平铺依赖沿此可达
+  const shadowNm = path.join(shadow, 'node_modules')
+  if (!fs.existsSync(shadowNm)) fs.symlinkSync(NM, shadowNm)
   if (!patchInto(shadow, p)) {
     fs.rmSync(shadow, { recursive: true, force: true })
     return { ok: false, error: 'patch failed on shadow' }
@@ -384,7 +420,7 @@ function applyOne(p, { dryRun, force }) {
     return r
   }
   r.mounted = isMounted(p.name, p.slug)
-  r.installedVersion = installedVersion(p.name, p.slug)
+  r.installedVersion = installedVersion(p.name)
   r.versionMatch = r.installedVersion === p.version
   if (r.versionMatch === false && !force) {
     // 版本不匹配：确保没挂着旧副本（保底清除已处理，这里只是保险）
@@ -416,7 +452,7 @@ function applyOne(p, { dryRun, force }) {
 
 function revertOne(p) {
   const r = { name: p.name, patchVersion: p.version }
-  r.installedVersion = installedVersion(p.name, p.slug)
+  r.installedVersion = installedVersion(p.name)
   r.status = dismount(p) ? 'reverted' : 'not-applied'
   return r
 }
