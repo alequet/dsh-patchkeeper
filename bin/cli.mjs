@@ -461,7 +461,19 @@ function collectStatus({ dryRun, force, only }) {
   const results = listPatchFiles()
     .filter((p) => !only || p.name === only)
     .map((p) => applyOne(p, { dryRun, force }))
-  return { command: dryRun ? 'status' : 'apply', profile: PROFILE, results }
+  const out = { command: dryRun ? 'status' : 'apply', profile: PROFILE, results }
+  // 失明检测：看门狗自己没上岗时，status 必须大声说出来（今天的教训）
+  if (results.length) {
+    const pkg = readJson(path.join(PROFILE, 'package.json'))
+    const enabled = (pkg.dsh?.profile?.bundles || []).includes('dsh-patchkeeper')
+    const noneMounted = results.every((r) => !r.mounted)
+    if (!enabled) {
+      out.alarm = '🚨 patchkeeper 未启用（不在 bundles 列表）：所有补丁正在静默失效！运行 doctor --fix 并重启 DSH'
+    } else if (dryRun && noneMounted && results.some((r) => r.versionMatch)) {
+      out.alarm = '🚨 有匹配补丁但一个都没挂载——若已重启过 DSH，patchkeeper 可能加载失败，请查日志'
+    }
+  }
+  return out
 }
 
 function cmdRevert({ only } = {}) {
@@ -547,6 +559,7 @@ if (flags.json) {
     empty: '- 空补丁', 'version-mismatch': '⊘ 版本不匹配，已跳过',
     reverted: '✓ 已恢复原版', 'revert-failed': '✗ 恢复失败',
   }
+  if (out.alarm) console.log(`\n${out.alarm}\n`)
   for (const r of out.results) {
     const vm = r.versionMatch === false ? ` (补丁 ${r.patchVersion} ≠ 已装 ${r.installedVersion})` : ''
     console.log(`${icon[r.status] || r.status}  ${r.name}${vm}`)
