@@ -199,6 +199,37 @@ function profileLists(name) {
   }
 }
 
+// ---------- 补丁配置（启用开关 + 效果说明，随 patches/ 入 git） ----------
+
+const CONFIG_FILE = path.join(PATCHES_DIR, 'config.json')
+
+function readConfig() {
+  try {
+    return readJson(CONFIG_FILE)
+  } catch {
+    return {}
+  }
+}
+
+function writeConfig(cfg) {
+  fs.mkdirSync(PATCHES_DIR, { recursive: true })
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + '\n')
+}
+
+const isEnabled = (name) => readConfig()[name]?.enabled !== false
+
+// 从补丁文件解析被覆盖的文件清单（供 UI 展示）
+function patchFileList(p) {
+  const files = []
+  const patchPath = path.join(PATCHES_DIR, p.file)
+  if (fs.existsSync(patchPath)) {
+    const text = fs.readFileSync(patchPath, 'utf8')
+    for (const m of text.matchAll(/^diff -ruN a\/(?<f>.+?) b\/.+$/gm)) files.push(m.groups.f)
+  }
+  files.push(...binFilesOf(p.slug).files.map((f) => f + ' (binary)'))
+  return files
+}
+
 // 摘一个挂载：删我们的软链 → 原版归位 → 销毁副本。返回是否有实际清理动作。
 // 竞态防护：若条目已被外部（升级器）换成新安装，原版备份已过时——丢弃备份，保留新装。
 function dismount(p) {
@@ -450,9 +481,16 @@ function applyOne(p, { dryRun, force }) {
     r.status = 'missing-target'
     return r
   }
+  r.enabled = isEnabled(p.name)
   r.mounted = isMounted(p.name, p.slug)
   r.installedVersion = installedVersion(p.name)
   r.versionMatch = r.installedVersion === p.version
+  if (!r.enabled) {
+    if (r.mounted && !dryRun) dismount(p) // 禁用 = 恢复原插件 + 清副本
+    r.mounted = false
+    r.status = 'disabled'
+    return r
+  }
   if (r.versionMatch === false && !force) {
     // 版本不匹配：确保没挂着旧副本（保底清除已处理，这里只是保险）
     if (r.mounted && !dryRun) dismount(p)
@@ -570,7 +608,68 @@ switch (command) {
     break
   }
   case 'status': out = collectStatus({ dryRun: true, force: flags.force, only: flags.only }); break
-  case 'list': out = { command: 'list', patches: listPatchFiles() }; break
+  case 'list': {
+    const cfg = readConfig()
+    const lastApply = readState().lastApply || []
+    out = {
+      command: 'list',
+      patches: listPatchFiles().map((p) => {
+        const probe = applyOne(p, { dryRun: true })
+        const last = lastApply.find((r) => r.name === p.name)
+        return {
+          name: p.name,
+          version: p.version,
+          enabled: cfg[p.name]?.enabled !== false,
+          note: cfg[p.name]?.note || '',
+          files: patchFileList(p),
+          installedVersion: probe.installedVersion,
+          status: probe.status,
+          mounted: !!probe.mounted,
+          // 上次真实挂载留下的错误（probe 是 dry-run，探不到这些）
+          lastError: (lastApply && ['apply-failed', 'conflict'].includes(lastApply.status) && (lastApply.error || lastApply.status)) || null,
+        }
+      }),
+    }
+    if (out.patches.length) {
+      const pkgj = readJson(path.join(PROFILE, 'package.json'))
+      if (!(pkgj.dsh?.profile?.bundles || []).includes('dsh-patchkeeper')) {
+        out.alarm = '🚨 patchkeeper 未启用（不在 bundles 列表）：所有补丁正在静默失效！运行 doctor --fix 并重启 DSH'
+      } else if (out.patches.every((r) => !r.mounted) && out.patches.some((r) => r.enabled !== false && r.installedVersion === r.version)) {
+        out.alarm = '🚨 有匹配补丁但一个都没挂载——若已重启过 DSH，patchkeeper 可能加载失败，请查日志'
+      }
+    }
+    break
+  }
+  case 'enable':
+  case 'disable': {
+    const target = flags.only
+    if (!target) {
+      console.error('用法: ' + command + ' --pkg <包名>')
+      process.exit(1)
+    }
+    const cfg = readConfig()
+    cfg[target] = { ...(cfg[target] || {}), enabled: command === 'enable' }
+    writeConfig(cfg)
+    out = collectStatus({ dryRun: false, force: flags.force, only: target })
+    break
+  }
+  case 'note': {
+    const rest = []
+    for (let i = args.indexOf('note') + 1; i < args.length; i++) {
+      if (args[i] === '--pkg') { i++; continue } // 跳过 --pkg 及其值
+      if (!args[i].startsWith('-')) rest.push(args[i])
+    }
+    const noteText = rest.join(' ')
+    if (!flags.only || !noteText) {
+      console.error('用法: note --pkg <包名> <效果说明>')
+      process.exit(1)
+    }
+    const cfg = readConfig()
+    cfg[flags.only] = { ...(cfg[flags.only] || {}), note: noteText }
+    writeConfig(cfg)
+    out = { command: 'note', name: flags.only, note: noteText }
+    break
+  }
   case 'doctor': out = cmdDoctor({ fix: flags.fix, log }); break
   default:
     console.log('用法: extract | apply [--force] | remount | revert | status | list | doctor [--fix] [--json] [--pkg <name>]')
@@ -587,7 +686,7 @@ if (flags.json) {
   const icon = {
     'applied-now': '✓ 已挂载副本', applied: '· 副本已挂载', 'not-applied': '○ 未挂载',
     conflict: '✗ 冲突', 'missing-target': '✗ 目标缺失', 'apply-failed': '✗ 挂载失败',
-    empty: '- 空补丁', 'version-mismatch': '⊘ 版本不匹配，已跳过',
+    empty: '- 空补丁', 'version-mismatch': '⊘ 版本不匹配，已跳过', disabled: '⏸ 已禁用',
     reverted: '✓ 已恢复原版', 'revert-failed': '✗ 恢复失败',
   }
   if (out.alarm) console.log(`\n${out.alarm}\n`)
@@ -605,7 +704,10 @@ if (flags.json) {
     process.exitCode = 2
   }
 } else if (command === 'list') {
-  for (const p of out.patches) console.log(`${p.name}@${p.version}  (${p.file})`)
+  for (const p of out.patches) {
+    const flag = p.enabled ? (p.mounted ? '✓ 挂载中' : '○ 未挂载') : '⏸ 已禁用'
+    console.log(`${flag}  ${p.name}@${p.version}${p.note ? '  —— ' + p.note : ''}`)
+  }
   if (!out.patches.length) console.log('(还没有补丁，先跑 extract)')
 } else if (command === 'doctor') {
   if (!out.issues.length) console.log('注册状态正常 ✓')

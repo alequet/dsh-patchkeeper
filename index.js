@@ -111,8 +111,8 @@ function registerApi(ctx, logger) {
       async handler(req, res) {
         try {
           if (req.method === 'GET') {
-            const out = runCli(logger, ['status'])
-            return sendJson(res, 200, out || { results: [], error: 'status failed' })
+            const out = runCli(logger, ['list'])
+            return sendJson(res, 200, out || { patches: [], error: 'list failed' })
           }
           if (req.method === 'POST') {
             let payload = {}
@@ -121,17 +121,20 @@ function registerApi(ctx, logger) {
             } catch {
               return sendJson(res, 400, { error: 'bad json' })
             }
-            const { action, name: pkgName } = payload
+            const { action, name: pkgName, note } = payload
             if (!pkgName || typeof pkgName !== 'string') return sendJson(res, 400, { error: 'missing name' })
             let out
             if (action === 'adapt') out = runCli(logger, ['apply', '--force', '--pkg', pkgName])
             else if (action === 'extract') out = runCli(logger, ['extract', '--pkg', pkgName])
             else if (action === 'revert') out = runCli(logger, ['revert', '--pkg', pkgName])
+            else if (action === 'enable') out = runCli(logger, ['enable', '--pkg', pkgName])
+            else if (action === 'disable') out = runCli(logger, ['disable', '--pkg', pkgName])
+            else if (action === 'note') out = runCli(logger, ['note', '--pkg', pkgName, String(payload.note ?? '')])
             else return sendJson(res, 400, { error: 'unknown action' })
             if (!out) return sendJson(res, 500, { error: 'cli failed' })
-            // 操作后附上一份最新状态，前端直接刷新
-            const status = runCli(logger, ['status'])
-            return sendJson(res, 200, { action, result: out, status })
+            // 操作后附上一份最新清单，前端直接刷新
+            const list = runCli(logger, ['list'])
+            return sendJson(res, 200, { action, result: out, list })
           }
           sendJson(res, 405, { error: 'method not allowed' })
         } catch (err) {
