@@ -40,6 +40,14 @@ node $CLI revert                     # 摘除全部挂载，恢复原版
 
 数据目录可用 `DSH_PATCHKEEPER_HOME` 环境变量覆盖；管理的 profile 用 `DSH_PROFILE` 覆盖（默认 desktop）。
 
+## 与「在线更新」共处（不重启客户端更新插件时）
+
+- 副本与原版备份都在 profile 的 node_modules **之外**（数据目录 `shadows/`），pnpm 的在线安装/ reconcile 剪枝碰不到它们。
+- 插件被在线更新：条目被换成新版干净目录，下次启动按版本闸处理（匹配就重打，不匹配就跳过+管理页提示卡）。
+- 运行中用 CLI 手动 remount/revert 会让运行中进程缓存的解析路径失效，之后若再做在线插件操作可能报 stale 路径错误——**重启即愈**，不是数据损坏。
+- 在线更新后补丁功能要重启 DSH 才恢复（运行中的进程已加载旧代码，换磁盘文件不影响内存）。
+- patchkeeper 自身的更新：管理页对 git 源插件不显示更新按钮时，用同样的 git 地址重新「安装」一次即可。
+
 ## License
 
 MIT
