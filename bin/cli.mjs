@@ -396,6 +396,150 @@ function extractOne(name, spec, { log }) {
   }
 }
 
+// ---------- AI 适配（版本失配后的自动合并） ----------
+
+const ADAPT_DIR = () => path.join(DATA_DIR, 'adapt')
+
+// 补丁文本 → 按文件拆段（每段带 diff 头 + ---/+++ + hunks）
+function splitPatchByFile(text) {
+  const sections = []
+  const marks = [...text.matchAll(/^diff -ruN(?: \S+)* a\/(?<f>.+?) b\/.+$/gm)]
+  for (let i = 0; i < marks.length; i++) {
+    const start = marks[i].index
+    const end = i + 1 < marks.length ? marks[i + 1].index : text.length
+    sections.push({ file: marks[i].groups.f, text: text.slice(start, end) })
+  }
+  return sections
+}
+
+// 机械合：旧补丁逐文件 fuzz 打到新版原版上；全干净 → 直接产出新版补丁；有冲突 → 逐文件打包 AI 上下文
+function cmdAdaptAuto({ name, toVersion, log }) {
+  const p = listPatchFiles().find((x) => x.name === name)
+  if (!p) return { command: 'adapt-auto', name, outcome: 'no-patch' }
+  const installed = installedVersion(name)
+  const target = toVersion || installed
+  if (!target) return { command: 'adapt-auto', name, outcome: 'no-target-version' }
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'patchkeeper-adapt-'))
+  try {
+    const pack = run('npm', ['pack', `${name}@${target}`, '--pack-destination', tmp, '--silent'], { cwd: tmp })
+    if (pack.status !== 0) return { command: 'adapt-auto', name, outcome: 'pack-failed', error: (pack.stderr || '').slice(0, 300) }
+    const tarball = (pack.stdout || '').trim().split('\n').pop().trim()
+    const fresh = path.join(tmp, 'fresh')
+    fs.mkdirSync(fresh)
+    run('tar', ['-xzf', path.join(tmp, tarball), '-C', fresh, '--strip-components=1'])
+
+    // 逐文件打：干净文件留在 fresh 上，失败的进 AI 上下文（AI 只需管坏文件）
+    const patchText = fs.readFileSync(path.join(PATCHES_DIR, p.file), 'utf8')
+    const sections = splitPatchByFile(patchText)
+    const rejected = []
+    for (const sec of sections) {
+      const secFile = path.join(tmp, 'sec.patch')
+      fs.writeFileSync(secFile, sec.text)
+      const rejFile = path.join(tmp, 'sec.rej')
+      fs.rmSync(rejFile, { force: true })
+      const ap = run('patch', ['-p1', '-N', '-E', '-f', '--fuzz=3', '-d', fresh, '-i', secFile, '-r', rejFile])
+      if (ap.status !== 0) {
+        rejected.push({
+          file: sec.file,
+          rej: fs.existsSync(rejFile) ? fs.readFileSync(rejFile, 'utf8') : '(整个文件段失败)',
+          newContent: fs.existsSync(path.join(fresh, sec.file)) ? fs.readFileSync(path.join(fresh, sec.file), 'utf8') : null,
+        })
+      }
+    }
+    if (!rejected.length) {
+      const out = finalizeAdapt(name, p, target, fresh, tmp, log)
+      return { command: 'adapt-auto', name, outcome: out.ok ? 'auto-merged' : 'auto-failed', ...out }
+    }
+    const dir = path.join(ADAPT_DIR(), p.slug)
+    fs.rmSync(dir, { recursive: true, force: true })
+    fs.mkdirSync(dir, { recursive: true })
+    const pack2 = { name, fromVersion: p.version, toVersion: target, files: {} }
+    for (const r of rejected) pack2.files[r.file] = { rej: r.rej, newContent: r.newContent }
+    fs.writeFileSync(path.join(dir, 'context.json'), JSON.stringify(pack2, null, 2))
+    fs.cpSync(fresh, path.join(dir, 'fresh'), { recursive: true })
+    return { command: 'adapt-auto', name, outcome: 'needs-ai', contextDir: dir, rejectedFiles: rejected.map((r) => r.file) }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+}
+
+// 合并成功后的收口：从合并结果重新生成补丁、替换旧补丁文件、登记状态
+function finalizeAdapt(name, oldPatch, toVersion, mergedDir, tmp, log) {
+  return writeAdaptedPatch(name, oldPatch, toVersion, mergedDir, tmp, log)
+}
+
+function pristineDir(tmp, tarball) {
+  const d = path.join(tmp, 'pristine')
+  if (!fs.existsSync(d)) {
+    fs.mkdirSync(d, { recursive: true })
+    if (tarball) run('tar', ['-xzf', path.join(tmp, tarball), '-C', d, '--strip-components=1'])
+  }
+  return d
+}
+
+function writeAdaptedPatch(name, oldPatch, toVersion, mergedDir, tmp, log) {
+  const tarball = fs.readdirSync(tmp).find((f) => f.endsWith('.tgz'))
+  const pristine = pristineDir(tmp, tarball)
+  const aLink = path.join(tmp, 'a')
+  const bLink = path.join(tmp, 'b')
+  fs.rmSync(aLink, { force: true }); fs.rmSync(bLink, { force: true })
+  fs.symlinkSync(pristine, aLink)
+  fs.symlinkSync(mergedDir, bLink)
+  const exclFile = path.join(tmp, 'excludes.txt')
+  fs.writeFileSync(exclFile, EXCLUDES.join('\n') + '\n')
+  const diff = run('diff', ['-ruN', '-X', exclFile, 'a', 'b'], { cwd: tmp })
+  if (diff.status !== 1) return { ok: false, error: 'adapt produced no diff or diff failed' }
+  const body = diff.stdout.replace(/^diff -ruN.*? (?=a\/)/gm, 'diff -ruN ')
+  const slug = oldPatch.slug
+  const target = path.join(PATCHES_DIR, `${slug}__${toVersion}.patch`)
+  const header = `# dsh-patchkeeper patch\n# package: ${name}\n# version: ${toVersion}\n# adapted-from: ${oldPatch.version}（自动合并）\n# extracted: ${new Date().toISOString()}\n`
+  fs.writeFileSync(target, header + body)
+  // 同名（同版本再适配）时别把自己删了
+  if (path.basename(target) !== oldPatch.file) fs.rmSync(path.join(PATCHES_DIR, oldPatch.file), { force: true })
+  log?.(`  补丁已适配：${name} ${oldPatch.version} → ${toVersion}`)
+  return { ok: true, patch: target }
+}
+
+// AI 补完后的落盘验证：把 AI 补丁打到留存的 fresh 副本上，验证通过才收口
+function cmdAdaptApply({ name, toVersion, log }) {
+  const slug = slugOf(name)
+  const dir = path.join(ADAPT_DIR(), slug)
+  const aiPatch = path.join(dir, 'ai.patch')
+  const fresh = path.join(dir, 'fresh')
+  if (!fs.existsSync(aiPatch) || !fs.existsSync(fresh)) return { command: 'adapt-apply', name, outcome: 'no-context' }
+  const oldPatch = listPatchFiles().find((x) => x.name === name)
+  if (!oldPatch) return { command: 'adapt-apply', name, outcome: 'no-patch' }
+
+  const rej = path.join(dir, 'ai.rej')
+  fs.rmSync(rej, { force: true })
+  const ap = run('patch', ['-p1', '-N', '-E', '-f', '-d', fresh, '-i', aiPatch, '-r', rej])
+  if (ap.status !== 0) return { command: 'adapt-apply', name, outcome: 'ai-patch-rejected', rejectFile: rej }
+
+  // JS 语法门：改过的文件都要过 node --check
+  const aiText = fs.readFileSync(aiPatch, 'utf8')
+  const jsFiles = [...aiText.matchAll(/^diff \S+ b\/(.*\.(?:js|mjs|cjs))$/gm)].map((m) => m[1])
+  for (const f of jsFiles) {
+    const chk = run('node', ['--check', path.join(fresh, f)])
+    if (chk.status !== 0) return { command: 'adapt-apply', name, outcome: 'syntax-failed', file: f, error: (chk.stderr || '').slice(0, 300) }
+  }
+
+  // 用 fresh（已完成合并）与全新 pristine 出最终补丁
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'patchkeeper-finalize-'))
+  try {
+    const pack = run('npm', ['pack', `${name}@${toVersion}`, '--pack-destination', tmp, '--silent'], { cwd: tmp })
+    if (pack.status !== 0) return { command: 'adapt-apply', name, outcome: 'pack-failed' }
+    fs.renameSync(path.join(tmp, (pack.stdout || '').trim().split('\n').pop().trim()), path.join(tmp, 'pkg.tgz'))
+    // writeAdaptedPatch 期望 tmp 里有 .tgz
+    const out = writeAdaptedPatch(name, oldPatch, toVersion, fresh, tmp, log)
+    if (!out.ok) return { command: 'adapt-apply', name, outcome: 'diff-failed', error: out.error }
+    fs.rmSync(dir, { recursive: true, force: true })
+    return { command: 'adapt-apply', name, outcome: 'adapted', patch: out.patch }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+}
+
 function cmdExtract({ only, log }) {
   const pkgFile = readJson(path.join(PROFILE, 'package.json'))
   const deps = Object.entries(pkgFile.dependencies || {})
@@ -601,6 +745,7 @@ const flags = {
   fix: args.includes('--fix'),
   force: args.includes('--force'),
   only: args.includes('--pkg') ? args[args.indexOf('--pkg') + 1] : null,
+  to: args.includes('--to') ? args[args.indexOf('--to') + 1] : null,
 }
 const log = flags.json ? null : (s) => console.log(s)
 
@@ -642,6 +787,7 @@ switch (command) {
           status: probe.status,
           mounted: !!probe.mounted,
           mountedAt: swaps[p.name]?.at || null,
+          adapt: (state.adapt || {})[`${p.name}@${probe.installedVersion}`] || null,
           // 上次真实挂载留下的错误（probe 是 dry-run，探不到这些）
           lastError: (lastApply && ['apply-failed', 'conflict'].includes(lastApply.status) && (lastApply.error || lastApply.status)) || null,
         }
@@ -702,6 +848,16 @@ switch (command) {
     cfg[flags.only] = { ...(cfg[flags.only] || {}), note: noteText }
     writeConfig(cfg)
     out = { command: 'note', name: flags.only, note: noteText }
+    break
+  }
+  case 'adapt-auto': {
+    if (!flags.only) { console.error('用法: adapt-auto --pkg <包名> [--to <版本>]'); process.exit(1) }
+    out = cmdAdaptAuto({ name: flags.only, toVersion: flags.to, log })
+    break
+  }
+  case 'adapt-apply': {
+    if (!flags.only || !flags.to) { console.error('用法: adapt-apply --pkg <包名> --to <版本>（AI 补丁放在 adapt/<slug>/ai.patch）'); process.exit(1) }
+    out = cmdAdaptApply({ name: flags.only, toVersion: flags.to, log })
     break
   }
   case 'doctor': out = cmdDoctor({ fix: flags.fix, log }); break

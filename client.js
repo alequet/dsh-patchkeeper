@@ -217,7 +217,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function PatchRow({ p, busy, op, bootTs, onToggle, onSaveNote }) {
+    function PatchRow({ p, busy, op, bootTs, onToggle, onSaveNote, onRetry }) {
       const [note, setNote] = React.useState(p.note || '')
       const [dirty, setDirty] = React.useState(false)
       const meta = statusOf(p, bootTs)
@@ -254,6 +254,27 @@ window.__ModuleLoader__.load({
             : null,
           diag ? h('div', { key: 'diag', style: { fontSize: 12, color: '#dc3c3c', marginTop: 4, lineHeight: 1.6 } }, diag) : null,
           p.risk ? h('div', { key: 'risk', style: { fontSize: 12, color: '#d29922', marginTop: 4, lineHeight: 1.6 } }, `⚠ 禁用风险：${p.risk}`) : null,
+          p.adapt
+            ? h('div', {
+                key: 'adapt',
+                style: {
+                  fontSize: 12, marginTop: 4, lineHeight: 1.6,
+                  color: p.adapt.outcome === 'ai-failed' ? '#dc3c3c' : p.adapt.outcome === 'adapted' ? '#2ea043' : '#d29922',
+                },
+              }, [
+                p.adapt.outcome === 'running' ? `🤖 补丁正在自动适配 v${p.installedVersion}（机械合并 → AI 解冲突）…` : null,
+                p.adapt.outcome === 'adapted' ? `✓ 补丁已自动适配 v${p.installedVersion}（${p.adapt.mode === 'ai' ? 'AI 解冲突' : '机械合并'}），重启 DSH 后自动挂载` : null,
+                p.adapt.outcome === 'ai-failed' ? `✗ 自动适配失败：${p.adapt.error || '未知原因'}——已转人工，不再自动重试` : null,
+                p.adapt.outcome === 'ai-failed'
+                  ? h('button', {
+                      key: 'retry',
+                      style: { ...btnStyle, marginTop: 4, padding: '2px 10px', fontSize: 12, borderColor: 'rgba(220,60,60,0.5)' },
+                      disabled: busy,
+                      onClick: () => onRetry(p),
+                    }, '人工重试 AI 适配')
+                  : null,
+              ])
+            : null,
           op
             ? h('div', { key: 'op', style: { fontSize: 12, fontWeight: 600, marginTop: 4, color: op.ok ? '#2ea043' : '#dc3c3c' } }, op.text)
             : null,
@@ -353,6 +374,10 @@ window.__ModuleLoader__.load({
                   act(pp.enabled ? 'disable' : 'enable', pp)
                 },
                 onSaveNote: (pp, note) => act('note', pp, { note }),
+                onRetry: (pp) => {
+                  setOp(pp.name, true, '🤖 已重新开始 AI 适配…')
+                  act('adapt-retry', pp)
+                },
               }),
             ))
           : h('div', { key: 'empty', style: { opacity: 0.6, padding: '8px 0' } }, '补丁库为空——改了插件代码后跑 extract 入库。'),
