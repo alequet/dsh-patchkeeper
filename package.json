@@ -1,6 +1,6 @@
 {
   "name": "@alequet/dsh-patchkeeper",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "【补丁总开关：禁用我会让所有插件补丁静默失效！】本地补丁管家：影子副本热挂载，原版永远干净，官方升级后自动重打。Local patch keeper for DSH plugins — disabling me silently disables every patch.",
   "license": "MIT",
   "type": "module",
@@ -39,5 +39,10 @@
       "platform": "web",
       "inject": []
     }
+  },
+  "scripts": {
+    "release:patch": "node scripts/release.mjs patch",
+    "release:minor": "node scripts/release.mjs minor",
+    "release:major": "node scripts/release.mjs major"
   }
 }

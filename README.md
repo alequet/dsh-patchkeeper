@@ -89,6 +89,15 @@ node $CLI doctor [--fix]              # 检查/修复插件注册
 - **web boot 崩溃「duplicate factory registration」**：node_modules 里同时存在新旧两个包副本（如改名迁移期），删掉旧副本即可。
 - 插件页报错或补丁状态不对：先跑 `node <CLI> doctor --fix` 再重启。
 
+## 发版（维护者）
+
+```bash
+npm run release:patch -- "修了什么东西"      # 修 bug
+npm run release:minor -- "加了什么功能"      # 新功能
+```
+
+脚本会：语法检查三入口 → 把说明写进 CHANGELOG → bump 版本 → commit + tag + 推 GitHub → 提示跑 npm publish。**版本号唯一源头是 package.json**；README 若有旧版本号残留会报警。
+
 ## License
 
 MIT
