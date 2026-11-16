@@ -19,13 +19,23 @@ patches/<pkg>__<ver>.patch  @scope/pkg ──软链──▶ shadows/<pkg>（原
 
 ## 安装
 
-设置 → 插件 → 添加 → 安装第三方插件，输入：
+已发布到 npm：[**@alequet/dsh-patchkeeper**](https://www.npmjs.com/package/@alequet/dsh-patchkeeper)
+
+**方式 A（推荐）**：设置 → 插件 → 添加 → 安装第三方插件，输入：
 
 ```
 @alequet/dsh-patchkeeper
 ```
 
-重启后生效。
+**方式 B（命令行）**：
+
+```bash
+dsh plugin --profile desktop add @alequet/dsh-patchkeeper
+```
+
+**方式 C（GitHub 源码）**：安装框里输入 `github:alequet/dsh-patchkeeper`
+
+装完重启 DSH 生效。
 
 ## 可观测性（不靠「没报错」脑补）
 
