@@ -67,6 +67,29 @@ function applyPatches(logger) {
   }
 }
 
+// 挂载变更后尝试借插件管理器的机器即时生效：
+// 刷新 resolution 快照 + HMR 重载。任一环节缺席/失败就退回「重启后生效」。
+async function tryLiveReload(ctx, logger) {
+  try {
+    const hmr = typeof ctx.get === 'function' ? ctx.get('hmr') : null
+    const packages = typeof ctx.get === 'function' ? ctx.get('pluginPackages') : null
+    if (!hmr || typeof hmr.runExclusive !== 'function' || typeof hmr.reconcileProfile !== 'function') return 'restart-required'
+    if (packages?.resolution !== undefined && typeof packages.refresh === 'function') {
+      try {
+        await packages.refresh()
+      } catch (err) {
+        if (!String(err?.name || err).includes('ResolutionRestartRequired')) throw err
+        return 'restart-required'
+      }
+    }
+    await hmr.runExclusive(() => hmr.reconcileProfile([]))
+    return 'reloaded'
+  } catch (err) {
+    logger.warn(`热重载未完成（重启后生效）: ${err?.message || err}`)
+    return 'restart-required'
+  }
+}
+
 // ---- UI HTTP 通道 ----
 
 function sendJson(res, code, obj) {
@@ -120,9 +143,14 @@ function registerApi(ctx, logger) {
             else if (action === 'note') out = runCli(logger, ['note', '--pkg', pkgName, String(payload.note ?? '')])
             else return sendJson(res, 400, { error: 'unknown action' })
             if (!out) return sendJson(res, 500, { error: 'cli failed' })
+            // 挂载类操作成功后，借插件管理器的 HMR 机器尝试即时生效
+            let reload = null
+            if (['enable', 'disable', 'adapt', 'revert'].includes(action)) {
+              reload = await tryLiveReload(ctx, logger)
+            }
             // 操作后附上一份最新清单，前端直接刷新
             const list = runCli(logger, ['list'])
-            return sendJson(res, 200, { action, result: out, list })
+            return sendJson(res, 200, { action, result: out, reload, list })
           }
           sendJson(res, 405, { error: 'method not allowed' })
         } catch (err) {

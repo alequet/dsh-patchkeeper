@@ -316,11 +316,13 @@ window.__ModuleLoader__.load({
             setOp(p.name, false, `操作失败：${j.error}`)
           } else {
             const r = j.result && j.result.results && j.result.results[0]
+            const live = j.reload === 'reloaded'
+            const suffix = live ? '（已热重载，即时生效）' : '（后端代码重启 DSH 后切换）'
             if (action === 'enable') {
-              if (r && (r.status === 'applied-now' || r.status === 'applied')) setOp(p.name, true, '✓ 已启用：副本已创建并挂载（后端代码重启 DSH 后切换）')
+              if (r && (r.status === 'applied-now' || r.status === 'applied')) setOp(p.name, true, `✓ 已启用：副本已创建并挂载${suffix}`)
               else setOp(p.name, false, `✗ 启用失败：${(r && (r.error || r.status)) || '未知原因'}`)
             } else if (action === 'disable') {
-              if (r && (r.status === 'reverted' || r.status === 'not-applied')) setOp(p.name, true, '✓ 已禁用：恢复原插件、副本已清除（重启后完全生效）')
+              if (r && (r.status === 'reverted' || r.status === 'not-applied')) setOp(p.name, true, `✓ 已禁用：恢复原插件、副本已清除${suffix}`)
               else setOp(p.name, false, `✗ 禁用失败：${(r && (r.error || r.status)) || '未知原因'}`)
             } else if (action === 'note') {
               setOp(p.name, true, '✓ 说明已保存')
