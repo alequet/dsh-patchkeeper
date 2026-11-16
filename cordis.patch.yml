@@ -3,4 +3,4 @@
 # 本插件必须排在 bundles 首位：apply 要抢在其他插件代码被 import 之前跑。
 - insert:
     - id: patchkeeper
-      name: dsh-patchkeeper
+      name: '@alequet/dsh-patchkeeper'

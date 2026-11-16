@@ -453,7 +453,7 @@ window.__ModuleLoader__.load({
       })
       slots.inject('plugins.bundle.config', () => {
         try {
-          return slots.register({ name: 'plugins.bundle.config', key: 'dsh-patchkeeper' }, PatchPanel)
+          return slots.register({ name: 'plugins.bundle.config', key: '@alequet/dsh-patchkeeper' }, PatchPanel)
         } catch {
           return () => {}
         }

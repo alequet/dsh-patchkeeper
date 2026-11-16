@@ -58,7 +58,7 @@ const EXCLUDES = [
 ]
 
 // 不进补丁管理的包（我们自己 / 本地包）
-const SKIP_PKGS = new Set(['dsh-patchkeeper'])
+const SKIP_PKGS = new Set(['@alequet/dsh-patchkeeper', 'dsh-patchkeeper'])
 
 // ---------- 小工具 ----------
 
@@ -547,7 +547,7 @@ function collectStatus({ dryRun, force, only }) {
   // 失明检测：看门狗自己没上岗时，status 必须大声说出来（今天的教训）
   if (results.length) {
     const pkg = readJson(path.join(PROFILE, 'package.json'))
-    const enabled = (pkg.dsh?.profile?.bundles || []).includes('dsh-patchkeeper')
+    const enabled = (pkg.dsh?.profile?.bundles || []).includes('@alequet/dsh-patchkeeper')
     const noneMounted = results.every((r) => !r.mounted)
     if (!enabled) {
       out.alarm = '🚨 patchkeeper 未启用（不在 bundles 列表）：所有补丁正在静默失效！运行 doctor --fix 并重启 DSH'
@@ -569,23 +569,23 @@ function cmdRevert({ only } = {}) {
 
 function cmdDoctor({ fix, log }) {
   const issues = []
-  const linkPath = path.join(NM, 'dsh-patchkeeper')
+  const linkPath = path.join(NM, '@alequet/dsh-patchkeeper')
   const pkgFile = path.join(PROFILE, 'package.json')
   const pkg = readJson(pkgFile)
 
   if (!fs.existsSync(linkPath)) {
-    issues.push('node_modules/dsh-patchkeeper 缺失——请通过插件管理页（安装第三方插件）重新安装')
+    issues.push('node_modules/@alequet/dsh-patchkeeper 缺失——请通过插件管理页（安装第三方插件）重新安装')
   }
-  if (!pkg.dependencies?.['dsh-patchkeeper']) {
-    issues.push('profile package.json 缺少 dsh-patchkeeper 依赖——请通过插件管理页安装')
+  if (!pkg.dependencies?.['@alequet/dsh-patchkeeper']) {
+    issues.push('profile package.json 缺少 @alequet/dsh-patchkeeper 依赖——请通过插件管理页安装')
   }
   const bundles = pkg.dsh?.profile?.bundles || []
-  if (!bundles.includes('dsh-patchkeeper')) {
-    issues.push('profile bundles 列表缺少 dsh-patchkeeper')
+  if (!bundles.includes('@alequet/dsh-patchkeeper')) {
+    issues.push('profile bundles 列表缺少 @alequet/dsh-patchkeeper')
     if (fix) {
-      pkg.dsh.profile.bundles = ['dsh-patchkeeper', ...bundles]
+      pkg.dsh.profile.bundles = ['@alequet/dsh-patchkeeper', ...bundles]
       fs.writeFileSync(pkgFile, JSON.stringify(pkg, null, 2) + '\n')
-      log?.('已把 dsh-patchkeeper 加回 bundles 首位')
+      log?.('已把 @alequet/dsh-patchkeeper 加回 bundles 首位')
     }
   }
   return { command: 'doctor', fixed: !!fix, issues }
@@ -649,7 +649,7 @@ switch (command) {
     }
     if (out.patches.length) {
       const pkgj = readJson(path.join(PROFILE, 'package.json'))
-      if (!(pkgj.dsh?.profile?.bundles || []).includes('dsh-patchkeeper')) {
+      if (!(pkgj.dsh?.profile?.bundles || []).includes('@alequet/dsh-patchkeeper')) {
         out.alarm = '🚨 patchkeeper 未启用（不在 bundles 列表）：所有补丁正在静默失效！运行 doctor --fix 并重启 DSH'
       } else if (out.patches.every((r) => !r.mounted) && out.patches.some((r) => r.enabled !== false && r.installedVersion === r.version)) {
         out.alarm = '🚨 有匹配补丁但一个都没挂载——若已重启过 DSH，patchkeeper 可能加载失败，请查日志'

@@ -22,7 +22,7 @@ patches/<pkg>__<ver>.patch  @scope/pkg ──软链──▶ shadows/<pkg>（原
 设置 → 插件 → 添加 → 安装第三方插件，输入：
 
 ```
-github:alequet/dsh-patchkeeper
+@alequet/dsh-patchkeeper
 ```
 
 重启后生效。
