@@ -2,13 +2,20 @@
 
 给 DeepSeek Harness 插件的本地魔改一个家。
 
-你改过某个插件的代码（加模型、修 bug、调行为）？官方一升级，改动就被冲掉；带着改动升级，插件可能加载失败、整个客户端起不来。patchkeeper 用**影子副本挂载**解决这个问题：
+你改过某个插件的代码（加模型、修 bug、调行为）？官方一升级，改动就被冲掉；带着改动升级，插件可能加载失败、整个客户端起不来。patchkeeper 用**影子副本常驻挂载**解决这个问题。
 
-- **原版插件永远干净**：补丁打在用后即焚的克隆副本上（APFS clonefile 秒级），node_modules 条目只是指向副本的软链
-- **启动时**：保底清除上次残留 → 版本匹配检查 → 匹配才把补丁打进副本并挂载，本轮即生效
-- **版本不匹配**（插件刚升级）：跳过不打，插件以原版启动保证能开机；插件管理页详情页出现「补丁未加载」提示卡 + 适配按钮
-- **退出时**：摘除挂载、销毁副本、原版归位；崩溃没执行到也不要紧，下次启动自动收拾
-- **补丁即资产**：`patches/*.patch` 存在独立数据目录（默认 `~/.dsh/patch-manager`），建议 git 管理
+## 工作原理
+
+```
+补丁库（git 管理）          profile node_modules                数据目录
+patches/<pkg>__<ver>.patch  @scope/pkg ──软链──▶ shadows/<pkg>（原版克隆 + 补丁）
+                            @scope/pkg 的原版 ──备份──▶ shadows/orig/<pkg>
+```
+
+- **常驻挂载**：DSH 启动时用「冻结快照」决定每个包从哪个目录加载，快照早于一切插件代码运行——所以补丁必须在进程启动前就在磁盘上，且**挂载不随退出摘除**
+- **启动时**：保底清除（只收拾崩溃残留/升级替换留下的坏挂载，健康挂载原地不动）→ 版本闸（补丁版本 == 插件版本才挂）→ 副本新鲜度校验（补丁文件改过就重建副本）
+- **版本不匹配**（插件刚升级）：不挂载，插件以原版启动保证能开机；插件管理页该插件详情页出「补丁未加载」徽章 + 适配卡片
+- **升级安全**：pnpm/安装器随时可以换掉软链装新包（实测 pnpm 会保留 link），保底清除识别后丢弃过时备份、基于新版重新评估
 
 ## 安装
 
@@ -20,33 +27,41 @@ github:alequet/dsh-patchkeeper
 
 重启后生效。
 
-## 使用
+## 可观测性（不靠「没报错」脑补）
+
+- **🩹 生效标记**：挂载中的插件在插件管理页的列表描述里带「🩹 补丁生效中」；看不到 = 没生效
+- **开机 toast**：启动后右上角「N 个补丁生效中 ✓」；异常则常驻红/黄牌
+- **补丁管理台**：patchkeeper 自己的详情页——补丁清单、效果说明、版本对照、每补丁启用开关（运行期即时挂载/摘除）、操作结果红绿反馈、失败常驻红字诊断
+- **CLI 失明告警**：补丁在库但 patchkeeper 未启用时，`status` 直接吼出来
+
+## CLI
 
 ```bash
 CLI=~/.dsh/profiles/desktop/node_modules/dsh-patchkeeper/bin/cli.mjs
 
-node $CLI status                     # 补丁状态总览
-node $CLI extract --pkg <包名>       # 把对某插件的改动收成补丁入库
-node $CLI apply                      # 保底清除 + 挂载版本匹配的副本
-node $CLI remount --pkg <包名>       # 改了补丁文件后一键重建副本
-node $CLI revert                     # 摘除全部挂载，恢复原版
+node $CLI list                        # 补丁清单（启用状态/说明/版本/挂载状态）
+node $CLI status                      # 状态总览 + 失明告警
+node $CLI apply                       # 保底清除 + 挂载版本匹配的副本
+node $CLI remount --pkg <包名>        # 改了补丁文件后一键重建副本
+node $CLI revert [--pkg <包名>]       # 手动摘除挂载，恢复原版
+node $CLI extract --pkg <包名>        # 把当前代码与 npm 原版的差异收成补丁入库
+node $CLI enable|disable --pkg <包名> # 单个补丁开关（持久化，随 patches 入 git）
+node $CLI note --pkg <包名> <说明>    # 写补丁效果说明
+node $CLI risk --pkg <包名> [说明]    # 挂/清禁用风险警告（禁用时弹确认）
+node $CLI doctor [--fix]              # 检查/修复插件注册
 ```
 
-### 调试循环
+## 调试循环
 
-1. 改挂载中的副本（node_modules 条目就指向它），重启验证
-2. `extract --pkg <包名>` 从副本提补丁入库
-3. 改错了：`git checkout -- patches/` 回滚补丁，再 `remount`
+1. 改挂载中的副本（node_modules 条目就指向它），重启 DSH 验证
+2. `extract --pkg <包名>` 从副本提补丁入库（自动剔除生效标记，不污染补丁）
+3. 改错了：补丁库是 git 仓库，`git checkout -- patches/` 回滚后 `remount`
 
-数据目录可用 `DSH_PATCHKEEPER_HOME` 环境变量覆盖；管理的 profile 用 `DSH_PROFILE` 覆盖（默认 desktop）。
+## 配置与环境变量
 
-## 与「在线更新」共处（不重启客户端更新插件时）
-
-- 副本与原版备份都在 profile 的 node_modules **之外**（数据目录 `shadows/`），pnpm 的在线安装/ reconcile 剪枝碰不到它们。
-- 插件被在线更新：条目被换成新版干净目录，下次启动按版本闸处理（匹配就重打，不匹配就跳过+管理页提示卡）。
-- 运行中用 CLI 手动 remount/revert 会让运行中进程缓存的解析路径失效，之后若再做在线插件操作可能报 stale 路径错误——**重启即愈**，不是数据损坏。
-- 在线更新后补丁功能要重启 DSH 才恢复（运行中的进程已加载旧代码，换磁盘文件不影响内存）。
-- patchkeeper 自身的更新：管理页对 git 源插件不显示更新按钮时，用同样的 git 地址重新「安装」一次即可。
+- 补丁库：默认 `~/.dsh/patch-manager`（用 `DSH_PATCHKEEPER_HOME` 覆盖）
+- 目标 profile：默认 `desktop`（用 `DSH_PROFILE` 覆盖，接受绝对路径或 profiles/ 下的名字）
+- 每补丁的启用/说明/风险：`patches/config.json`（随补丁库入 git）
 
 ## License
 

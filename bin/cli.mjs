@@ -146,9 +146,11 @@ function ensureCleanMount({ only } = {}) {
   cleanLegacyMounts()
   const state = readState()
   const swaps = state.swaps || {}
-  for (const [name, info] of Object.entries(swaps)) {
+  for (const [name] of Object.entries(swaps)) {
     if (only && name !== only) continue
     const p = { name, slug: slugOf(name) }
+    // 健康挂载（软链在、副本在、备份在）原地不动：启动时拆装了重挂，会跟冻结快照抢同一扇窗
+    if (isMounted(p.name, p.slug) && fs.existsSync(origDir(p.slug))) continue
     if (dismount(p)) repaired.push(name)
   }
   // 孤儿副本清扫：state 里没登记但 shadows 里躺着的（比如 state.json 丢了）
@@ -499,6 +501,17 @@ function applyOne(p, { dryRun, force }) {
     return r
   }
   if (r.mounted && !(force && !dryRun)) {
+    // 新鲜度校验：补丁文件改过了就重建副本（probe 是 dry-run，只读不写）
+    const patchPath = path.join(PATCHES_DIR, p.file)
+    if (fs.existsSync(patchPath) && probePatch(shadowDir(p.slug), patchPath) !== 'applied') {
+      if (!dryRun) {
+        dismount(p)
+        const m = mount(p)
+        r.status = m.ok ? 'applied-now' : 'apply-failed'
+        if (!m.ok) r.error = m.error
+        return r
+      }
+    }
     r.status = 'applied'
     return r
   }
