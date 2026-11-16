@@ -73,6 +73,18 @@ function applyPatches(logger) {
 
 // ---- AI 适配管线：版本失配 → 机械合 → 冲突交 AI → 成功则下次重启自动挂载；失败记录不再重试 ----
 
+function readAiAdaptConfig(cordisConfig) {
+  let fileCfg = {}
+  try {
+    fileCfg = JSON.parse(fsSync.readFileSync(path.join(DATA_DIR, 'patches', 'config.json'), 'utf8')).$aiAdapt || {}
+  } catch {}
+  const merged = { enabled: true, provider: '', model: '', ...(cordisConfig?.adaptModel ? { provider: cordisConfig.adaptModel.provider || '', model: cordisConfig.adaptModel.model || '', ...(cordisConfig.adaptModel.enabled !== void 0 ? { enabled: cordisConfig.adaptModel.enabled } : {}) } : {}), ...fileCfg }
+  const route = {}
+  if (merged.provider) route.provider = merged.provider
+  if (merged.model) route.model = merged.model
+  return { enabled: merged.enabled !== false, route }
+}
+
 function readState() {
   try {
     return JSON.parse(fsSync.readFileSync(STATE_FILE_PATH, 'utf8'))
@@ -223,7 +235,7 @@ function registerApi(ctx, logger) {
               return sendJson(res, 400, { error: 'bad json' })
             }
             const { action, name: pkgName, note } = payload
-            if (!pkgName || typeof pkgName !== 'string') return sendJson(res, 400, { error: 'missing name' })
+            if (action !== 'ai-config' && (!pkgName || typeof pkgName !== 'string')) return sendJson(res, 400, { error: 'missing name' })
             let out
             if (action === 'adapt') out = runCli(logger, ['apply', '--force', '--pkg', pkgName])
             else if (action === 'extract') out = runCli(logger, ['extract', '--pkg', pkgName])
@@ -231,6 +243,13 @@ function registerApi(ctx, logger) {
             else if (action === 'enable') out = runCli(logger, ['enable', '--pkg', pkgName])
             else if (action === 'disable') out = runCli(logger, ['disable', '--pkg', pkgName])
             else if (action === 'note') out = runCli(logger, ['note', '--pkg', pkgName, String(payload.note ?? '')])
+            else if (action === 'ai-config') {
+              const args = ['ai-config']
+              if (payload.enabled !== undefined) args.push('--enabled', payload.enabled ? 'true' : 'false')
+              if (payload.provider !== undefined) args.push('--provider', String(payload.provider))
+              if (payload.model !== undefined) args.push('--model', String(payload.model))
+              out = runCli(logger, args)
+            }
             else if (action === 'adapt-retry') {
               // 人工点重试：清掉该版本的适配记录并重跑管线
               const cur = runCli(logger, ['status', '--pkg', pkgName])
@@ -270,8 +289,11 @@ export function apply(ctx, config = {}) {
   // 启动：保底清除 + 版本匹配补挂。挂载是常驻的——本进程的冻结快照已在用它们。
   const results = applyPatches(logger)
   // 版本失配的补丁：后台 AI 适配（不阻塞启动）
-  if (results?.some((r) => r.status === 'version-mismatch' && r.enabled !== false)) {
-    void adaptPipeline(ctx, logger, results, config.adaptModel || {}).catch((err) => logger.warn(`AI 适配管线异常: ${err?.message || err}`))
+  const aiCfg = readAiAdaptConfig(config)
+  if (!aiCfg.enabled) {
+    if (results?.some((r) => r.status === 'version-mismatch')) logger.info('AI 适配已在设置中关闭；版本失配的补丁请人工适配')
+  } else if (results?.some((r) => r.status === 'version-mismatch' && r.enabled !== false)) {
+    void adaptPipeline(ctx, logger, results, aiCfg.route).catch((err) => logger.warn(`AI 适配管线异常: ${err?.message || err}`))
   }
 
   // UI 通道

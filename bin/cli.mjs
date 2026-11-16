@@ -220,6 +220,9 @@ function writeConfig(cfg) {
 
 const isEnabled = (name) => readConfig()[name]?.enabled !== false
 
+// AI 适配设置（保留键 $aiAdapt：{enabled, provider, model}）
+const aiAdaptConfig = () => readConfig().$aiAdapt || {}
+
 // 从补丁文件解析被覆盖的文件清单（供 UI 展示）
 function patchFileList(p) {
   const files = []
@@ -746,6 +749,9 @@ const flags = {
   force: args.includes('--force'),
   only: args.includes('--pkg') ? args[args.indexOf('--pkg') + 1] : null,
   to: args.includes('--to') ? args[args.indexOf('--to') + 1] : null,
+  enabled: args.includes('--enabled') ? args[args.indexOf('--enabled') + 1] !== 'false' : null,
+  provider: args.includes('--provider') ? args[args.indexOf('--provider') + 1] : null,
+  model: args.includes('--model') ? args[args.indexOf('--model') + 1] : null,
 }
 const log = flags.json ? null : (s) => console.log(s)
 
@@ -773,6 +779,7 @@ switch (command) {
     const swaps = state.swaps || {}
     out = {
       command: 'list',
+      aiAdapt: { enabled: true, provider: '', model: '', ...aiAdaptConfig() },
       patches: listPatchFiles().map((p) => {
         const probe = applyOne(p, { dryRun: true })
         const last = lastApply.find((r) => r.name === p.name)
@@ -858,6 +865,20 @@ switch (command) {
   case 'adapt-apply': {
     if (!flags.only || !flags.to) { console.error('用法: adapt-apply --pkg <包名> --to <版本>（AI 补丁放在 adapt/<slug>/ai.patch）'); process.exit(1) }
     out = cmdAdaptApply({ name: flags.only, toVersion: flags.to, log })
+    break
+  }
+  case 'ai-config': {
+    const cfg = readConfig()
+    const cur = cfg.$aiAdapt || {}
+    const next = { ...cur }
+    if (flags.enabled !== null) next.enabled = flags.enabled
+    if (flags.provider !== null) next.provider = flags.provider
+    if (flags.model !== null) next.model = flags.model
+    if (next !== cur) {
+      cfg.$aiAdapt = next
+      writeConfig(cfg)
+    }
+    out = { command: 'ai-config', aiAdapt: { enabled: true, provider: '', model: '', ...next } }
     break
   }
   case 'doctor': out = cmdDoctor({ fix: flags.fix, log }); break

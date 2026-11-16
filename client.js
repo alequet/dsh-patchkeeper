@@ -317,6 +317,43 @@ try {
       )
     }
 
+    function AiAdaptSettings({ ai, busy, onSave }) {
+      const [enabled, setEnabled] = React.useState(ai.enabled !== false)
+      const [provider, setProvider] = React.useState(ai.provider || '')
+      const [model, setModel] = React.useState(ai.model || '')
+      const [saved, setSaved] = React.useState(null)
+      const dirty = enabled !== (ai.enabled !== false) || provider !== (ai.provider || '') || model !== (ai.model || '')
+      const inputStyle = {
+        fontSize: 12, padding: '3px 8px', borderRadius: 6,
+        border: '1px solid rgba(128,128,128,0.35)', background: 'transparent', color: 'inherit', width: 150,
+      }
+      return h('div', { style: { ...cardStyle, borderColor: 'rgba(128,128,128,0.3)', background: 'rgba(128,128,128,0.06)', margin: '0 0 12px' } }, [
+        h('div', { key: 't', style: { display: 'flex', alignItems: 'center', gap: 10 } }, [
+          h('button', {
+            key: 'sw',
+            style: toggleStyle(enabled),
+            title: enabled ? '关闭后版本失配时不再自动适配（不消耗 token），需人工处理' : '开启后版本失配时后台自动机械合并 + AI 解冲突',
+            disabled: busy,
+            onClick: () => setEnabled(!enabled),
+          }, h('span', { style: knobStyle(enabled) })),
+          h('span', { key: 'lb', style: { fontWeight: 600 } }, 'AI 自动适配（插件升级后）'),
+          h('span', { key: 'hint', style: { fontSize: 11, opacity: 0.6 } }, enabled ? '开启：后台消耗 token 解冲突' : '已关闭：失配补丁只提示，等你人工适配'),
+        ]),
+        enabled ? h('div', { key: 'route', style: { display: 'flex', gap: 6, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' } }, [
+          h('span', { key: 'l', style: { fontSize: 12, opacity: 0.7 } }, '适配模型（留空 = 当前默认模型）'),
+          h('input', { key: 'p', value: provider, placeholder: 'provider（可选）', style: inputStyle, onChange: (e) => setProvider(e.target.value) }),
+          h('input', { key: 'm', value: model, placeholder: 'model（可选）', style: inputStyle, onChange: (e) => setModel(e.target.value) }),
+        ]) : null,
+        dirty ? h('button', {
+          key: 'save',
+          style: { ...btnStyle, marginTop: 8 },
+          disabled: busy,
+          onClick: () => onSave({ enabled, provider, model }).then((ok) => setSaved(ok ? '✓ 已保存' : null)),
+        }, '保存设置') : null,
+        saved && !dirty ? h('span', { key: 'saved', style: { marginLeft: 8, fontSize: 12, color: '#2ea043' } }, saved) : null,
+      ])
+    }
+
     function PatchPanel() {
       const [data, setData] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
@@ -358,9 +395,12 @@ try {
         } finally {
           setBusy(false)
         }
+        return true
       }
 
+      const ai = data.aiAdapt || { enabled: true, provider: '', model: '' }
       return h('div', { style: { fontSize: 13 } }, [
+        h(AiAdaptSettings, { key: 'ai', ai, busy, onSave: (v) => act('ai-config', { name: '_' }, v) }),
         data.alarm
           ? h('div', { key: 'alarm', style: { ...cardStyle, borderColor: 'rgba(220,60,60,0.5)', background: 'rgba(220,60,60,0.1)', fontWeight: 600 } }, data.alarm)
           : null,
