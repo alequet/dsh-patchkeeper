@@ -10,7 +10,7 @@
  * 数据来源：Node 侧 /dsh-patchkeeper-api（GET 清单 / POST 操作）。
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-patchkeeper',
+  id: '@alequet/dsh-patchkeeper', // 与包名一致：即使新旧两份包同时躺在 node_modules 里也不会撞模块 id（16:19 崩溃事故教训）
   factory: (require) => {
     const React = require('react')
     const h = React.createElement

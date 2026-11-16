@@ -74,6 +74,11 @@ node $CLI doctor [--fix]              # 检查/修复插件注册
 - 目标 profile：默认 `desktop`（用 `DSH_PROFILE` 覆盖，接受绝对路径或 profiles/ 下的名字）
 - 每补丁的启用/说明/风险：`patches/config.json`（随补丁库入 git）
 
+## 故障排查
+
+- **web boot 崩溃「duplicate factory registration」**：node_modules 里同时存在新旧两个包副本（如改名迁移期），删掉旧副本即可。
+- 插件页报错或补丁状态不对：先跑 `node <CLI> doctor --fix` 再重启。
+
 ## License
 
 MIT
