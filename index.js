@@ -1,22 +1,24 @@
 /**
- * dsh-patchkeeper — cordis 插件壳（热加载模式）。
+ * dsh-patchkeeper — cordis 插件壳（常驻挂载模式）。
  *
- * 生命周期：
- *   加载时（bundles 首位，早于其他插件 import）：
- *     同步跑 `cli.mjs apply`——版本匹配的补丁打上，不匹配的跳过（保证客户端一定能启动）。
- *   退出时（dispose / process exit 双保险）：
- *     同步跑 `cli.mjs revert`——磁盘上的插件恢复原版干净状态。
- *   崩溃保护：revert 幂等；非正常退出留有补丁时，下次启动的版本匹配检查依然成立。
+ * 生命周期（0.5.0 起改为常驻）：
+ *   DSH 启动时先用 createRuntimeResolution 冻结包路径快照，再加载插件——
+ *   所以补丁必须在进程启动前就挂在磁盘上，「退出时回退」会让补丁永远赶不上快照。
+ *   挂载常驻：启动时只做保底清除（崩溃残留/升级替换的修复）+ 版本匹配检查补挂。
+ *   升级安全由结构保证：原版完整备份在数据目录 shadows/orig/，node_modules 条目只是
+ *   一根软链，pnpm/安装器随时可以用新包替换它（保底清除会识别并丢弃过时备份）。
  *
  * UI 通道：注册 /dsh-patchkeeper-api
- *   GET            → 实时 status（插件管理页的徽章/提示卡取数）
- *   POST {action, name} → adapt（apply --force 单包）/ extract（以当前代码重建补丁）/ revert（单包回退）
+ *   GET            → 实时清单（插件管理页的徽章/提示卡/管理台取数）
+ *   POST {action, name} → adapt / extract / revert / enable / disable / note
  */
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const name = 'dsh-patchkeeper'
+// 本进程（≈冻结快照）时刻：快照之后挂载的补丁要下次启动才进运行代码
+const BOOT_TS = Date.now()
 // cordis 规矩：访问 ctx 上的服务必须先在这里声明；声明后服务不可用时仍为 null（参照 dsh-meme 同款写法）
 export const inject = ['webServer']
 
@@ -65,20 +67,6 @@ function applyPatches(logger) {
   }
 }
 
-function revertPatches(logger) {
-  // 退出路径短超时：宁可放弃回退（下次启动自愈），也不拖着客户端退不掉
-  const out = runCli(logger, ['revert'], 30_000)
-  if (!out) return
-  const reverted = out.results.filter((r) => r.status === 'reverted')
-  const failed = out.results.filter((r) => r.status === 'revert-failed')
-  if (reverted.length) {
-    logger.info(`退出清理：已回退 ${reverted.length} 个插件的补丁，磁盘恢复原版`)
-  }
-  for (const r of failed) {
-    logger.warn(`退出清理：${r.name} 补丁回退失败，下次启动将按版本匹配重新校验`)
-  }
-}
-
 // ---- UI HTTP 通道 ----
 
 function sendJson(res, code, obj) {
@@ -112,7 +100,7 @@ function registerApi(ctx, logger) {
         try {
           if (req.method === 'GET') {
             const out = runCli(logger, ['list'])
-            return sendJson(res, 200, out || { patches: [], error: 'list failed' })
+            return sendJson(res, 200, { ...(out || { patches: [] }), bootTs: BOOT_TS })
           }
           if (req.method === 'POST') {
             let payload = {}
@@ -149,17 +137,12 @@ export function apply(ctx, config = {}) {
   if (config.enabled === false) return
   const logger = ctx.logger('patchkeeper')
 
-  // 启动：版本匹配检查 + 热打补丁（此时后续 bundle 的代码还没被 import，本轮即生效）
+  // 启动：保底清除 + 版本匹配补挂。挂载是常驻的——本进程的冻结快照已在用它们。
   applyPatches(logger)
 
   // UI 通道
   registerApi(ctx, logger)
 
-  // 退出：回退干净。dispose 与 exit 双保险（revert 幂等，重复执行无副作用）
-  const cleanup = () => revertPatches(logger)
-  ctx.on('dispose', () => {
-    cleanup()
-    process.removeListener('exit', cleanup) // HMR 自更新场景：老实例的 exit 监听不累积
-  })
-  process.once('exit', cleanup)
+  // 注意：退出时【不要】revert。冻结快照机制要求补丁在下次进程启动前就在磁盘上；
+  // 常驻挂载下，原版由 shadows/orig/ 备份保护，升级器替换软链后启动清理会自动归位。
 }

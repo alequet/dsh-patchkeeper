@@ -163,6 +163,11 @@ window.__ModuleLoader__.load({
 
     // ---------- patchkeeper 自己的详情页：补丁管理台 ----------
 
+    function statusOf(p, bootTs) {
+      if (p.mounted && p.mountedAt && bootTs && Date.parse(p.mountedAt) > bootTs) return ['✓ 已挂载·重启后生效', '#d29922']
+      return statusMeta[p.status] || [p.status, '#8b8b8b']
+    }
+
     const statusMeta = {
       applied: ['· 挂载中', '#2ea043'],
       'applied-now': ['✓ 刚挂载', '#2ea043'],
@@ -212,10 +217,10 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function PatchRow({ p, busy, op, onToggle, onSaveNote }) {
+    function PatchRow({ p, busy, op, bootTs, onToggle, onSaveNote }) {
       const [note, setNote] = React.useState(p.note || '')
       const [dirty, setDirty] = React.useState(false)
-      const meta = statusMeta[p.status] || [p.status, '#8b8b8b']
+      const meta = statusOf(p, bootTs)
       const diag = diagOf(p)
       return h(
         'div',
@@ -340,6 +345,7 @@ window.__ModuleLoader__.load({
                 p,
                 busy,
                 op: ops[p.name],
+                bootTs: data.bootTs,
                 onToggle: (pp) => {
                   if (pp.enabled && pp.risk && !window.confirm(`禁用风险：${pp.risk}\n\n确认禁用？`)) return
                   act(pp.enabled ? 'disable' : 'enable', pp)
@@ -368,10 +374,13 @@ window.__ModuleLoader__.load({
             return
           }
           const patches = Array.isArray(s.patches) ? s.patches : []
-          const mounted = patches.filter((r) => r.mounted).length
+          const bootTs = s.bootTs || 0
+          const effective = patches.filter((r) => r.mounted && r.mountedAt && Date.parse(r.mountedAt) <= bootTs).length
+          const pending = patches.filter((r) => r.mounted && (!r.mountedAt || Date.parse(r.mountedAt) > bootTs)).length
           const bad = patches.filter((r) => BAD_STATUSES.includes(r.status)).length
           if (bad) setInfo({ level: 'warn', text: `补丁管家：${bad} 个补丁未挂载，请到插件管理页处理` })
-          else if (mounted) setInfo({ level: 'ok', text: `补丁管家：${mounted} 个补丁已挂载 ✓` })
+          else if (pending) setInfo({ level: 'ok', text: `补丁管家：${pending} 个补丁已挂载（本轮启动的冻结快照更早，重启后生效）` })
+          else if (effective) setInfo({ level: 'ok', text: `补丁管家：${effective} 个补丁生效中 ✓` })
         })
         return () => {
           live = false

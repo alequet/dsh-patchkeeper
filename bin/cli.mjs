@@ -610,7 +610,9 @@ switch (command) {
   case 'status': out = collectStatus({ dryRun: true, force: flags.force, only: flags.only }); break
   case 'list': {
     const cfg = readConfig()
-    const lastApply = readState().lastApply || []
+    const state = readState()
+    const lastApply = state.lastApply || []
+    const swaps = state.swaps || {}
     out = {
       command: 'list',
       patches: listPatchFiles().map((p) => {
@@ -626,6 +628,7 @@ switch (command) {
           installedVersion: probe.installedVersion,
           status: probe.status,
           mounted: !!probe.mounted,
+          mountedAt: swaps[p.name]?.at || null,
           // 上次真实挂载留下的错误（probe 是 dry-run，探不到这些）
           lastError: (lastApply && ['apply-failed', 'conflict'].includes(lastApply.status) && (lastApply.error || lastApply.status)) || null,
         }
