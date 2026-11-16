@@ -73,6 +73,16 @@ node $CLI doctor [--fix]              # 检查/修复插件注册
 - 补丁库：默认 `~/.dsh/patch-manager`（用 `DSH_PATCHKEEPER_HOME` 覆盖）
 - 目标 profile：默认 `desktop`（用 `DSH_PROFILE` 覆盖，接受绝对路径或 profiles/ 下的名字）
 - 每补丁的启用/说明/风险：`patches/config.json`（随补丁库入 git）
+- AI 适配的模型路由：默认用 profile 的当前默认模型；要指定专用模型，在 profile 的 `cordis.patch.yml` 里给 patchkeeper 条目加配置：
+
+```yaml
+- id: patchkeeper
+  name: '@alequet/dsh-patchkeeper'
+  config:
+    adaptModel:
+      provider: bailian        # 可选，省略=默认 provider
+      model: qwen3.8-max-0902  # 可选，省略=默认模型
+```
 
 ## 故障排查
 

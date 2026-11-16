@@ -81,7 +81,7 @@ function readState() {
   }
 }
 
-async function callAiForPatch(ctx, contextPack) {
+async function callAiForPatch(ctx, contextPack, route = {}) {
   const filesText = Object.entries(contextPack.files)
     .map(([f, info]) => `### 文件 ${f}\n没打进去的 hunk（旧版语境）：\n\`\`\`\n${info.rej}\n\`\`\`\n该文件的**新版**内容：\n\`\`\`\n${info_truncate(f, info.newContent)}\n\`\`\``)
     .join('\n\n')
@@ -90,7 +90,9 @@ async function callAiForPatch(ctx, contextPack) {
 下面按文件给出：没打进去的 hunk（旧版语境）+ 该文件的新版内容。请为每个文件输出能直接打进新版本的 unified diff（路径前缀 a/ b/，patch -p1 可用，diff 头格式：diff -ruN a/<路径> b/<路径>）。只输出补丁本体，不要任何解释。
 
 ${filesText}`
-  const call = await ctx.llm.prepareCall({ maxTokens: 8192 })
+  // 路由：默认走 profile 的当前默认模型；可在 cordis.patch.yml 的 patchkeeper 条目里配置
+  // config: { adaptModel: { provider: '...', model: '...' } } 指定专用模型
+  const call = await ctx.llm.prepareCall({ maxTokens: 8192, ...route })
   let text = ''
   const stream = call.stream({
     ...call.config,
@@ -118,7 +120,7 @@ function extractPatch(text) {
   return start >= 0 ? body.slice(start) : null
 }
 
-async function adaptPipeline(ctx, logger, results) {
+async function adaptPipeline(ctx, logger, results, route = {}) {
   const mismatched = results.filter((r) => r.status === 'version-mismatch' && r.enabled !== false)
   if (!mismatched.length) return
   const state = readState()
@@ -136,7 +138,7 @@ async function adaptPipeline(ctx, logger, results) {
         logger.info(`${r.name} 补丁机械适配成功（${r.patchVersion} → ${r.installedVersion}），重启后自动挂载`)
       } else if (auto?.outcome === 'needs-ai') {
         const contextPack = JSON.parse(fsSync.readFileSync(path.join(auto.contextDir, 'context.json'), 'utf8'))
-        const aiText = await callAiForPatch(ctx, contextPack)
+        const aiText = await callAiForPatch(ctx, contextPack, route)
         const patchText = extractPatch(aiText)
         if (!patchText) throw new Error('AI 回复里没有可用的补丁')
         fsSync.writeFileSync(path.join(auto.contextDir, 'ai.patch'), patchText)
@@ -269,7 +271,7 @@ export function apply(ctx, config = {}) {
   const results = applyPatches(logger)
   // 版本失配的补丁：后台 AI 适配（不阻塞启动）
   if (results?.some((r) => r.status === 'version-mismatch' && r.enabled !== false)) {
-    void adaptPipeline(ctx, logger, results).catch((err) => logger.warn(`AI 适配管线异常: ${err?.message || err}`))
+    void adaptPipeline(ctx, logger, results, config.adaptModel || {}).catch((err) => logger.warn(`AI 适配管线异常: ${err?.message || err}`))
   }
 
   // UI 通道
