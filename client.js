@@ -9,8 +9,11 @@
  *
  * 数据来源：Node 侧 /dsh-patchkeeper-api（GET 清单 / POST 操作）。
  */
-window.__ModuleLoader__.load({
-  id: '@alequet/dsh-patchkeeper', // 与包名一致：即使新旧两份包同时躺在 node_modules 里也不会撞模块 id（16:19 崩溃事故教训）
+// 防撞双保险（16:19 崩溃事故教训）：① id 与包全名一致，跨名不撞；② 就算真撞了（同名残留副本），
+// load 抛错也只留警告——绝不让模块求值失败拖垮整个 web boot
+try {
+  window.__ModuleLoader__.load({
+  id: '@alequet/dsh-patchkeeper',
   factory: (require) => {
     const React = require('react')
     const h = React.createElement
@@ -494,4 +497,7 @@ window.__ModuleLoader__.load({
 
     return { name: 'dsh-patchkeeper', inject: ['slots'], apply }
   },
-})
+  })
+} catch (err) {
+  console.warn('[dsh-patchkeeper] 客户端模块注册跳过（可能是残留副本重复注册）:', err && err.message ? err.message : err)
+}
